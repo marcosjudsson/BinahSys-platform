@@ -19,3 +19,5 @@ faiss_index/
 
 # Ignorar pasta de configuração do Obsidian
 .obsidian/
+
+.streamlit/secrets.toml
