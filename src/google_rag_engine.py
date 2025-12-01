@@ -8,6 +8,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 import traceback
+from src.config import AVAILABLE_MODELS
 
 # Carrega variáveis de ambiente
 load_dotenv()
