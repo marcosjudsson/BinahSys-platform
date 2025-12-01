@@ -1,6 +1,8 @@
 # src/google_rag_engine.py (VERSÃO FINAL: ARQUITETURA CROSS-REGION)
 
 import os
+import json
+import tempfile
 import streamlit as st
 from google import genai
 from google.genai import types
@@ -10,11 +12,39 @@ import traceback
 # Carrega variáveis de ambiente
 load_dotenv()
 
+def setup_google_credentials():
+    """
+    Configura as credenciais do Google Cloud a partir do st.secrets (para Streamlit Cloud).
+    Cria um arquivo JSON temporário se as credenciais existirem nos secrets.
+    """
+    # Se já tiver a variável de ambiente definida (Local), não faz nada
+    if os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+        return
+
+    # Verifica se temos as credenciais no st.secrets
+    if "GOOGLE_CREDENTIALS" in st.secrets:
+        try:
+            # Cria um arquivo temporário para armazenar o JSON da chave
+            # O delete=False é necessário para que o arquivo persista e possa ser lido pela lib do Google
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp_key:
+                # Converte a seção TOML do secrets de volta para JSON
+                json.dump(dict(st.secrets["GOOGLE_CREDENTIALS"]), tmp_key)
+                tmp_key_path = tmp_key.name
+            
+            # Define a variável de ambiente para apontar para esse arquivo
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp_key_path
+            print(f"🔑 Credenciais do Google configuradas via st.secrets em: {tmp_key_path}")
+        except Exception as e:
+            print(f"⚠️ Erro ao configurar credenciais via secrets: {e}")
+
 def get_google_config():
     """
-    Recupera configurações.
+    Recupera configurações e garante autenticação.
     Retorna (Project ID, Região dos DADOS).
     """
+    # Tenta configurar credenciais antes de ler configs
+    setup_google_credentials()
+
     try:
         project_id = os.getenv("GOOGLE_PROJECT_ID") or st.secrets.get("GOOGLE_PROJECT_ID")
         # Esta location é onde estão os DADOS (RAG Corpus), ex: europe-west4
@@ -22,8 +52,6 @@ def get_google_config():
         return project_id, rag_location
     except Exception:
         return None, None
-
-from src.config import AVAILABLE_MODELS
 
 def consultar_corpus_vertex(query, corpus_id, system_instruction=None, model_id_override=None):
     """
