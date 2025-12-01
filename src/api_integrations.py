@@ -1,5 +1,14 @@
 import os
 import requests
+from src.config import AVAILABLE_MODELS
+
+def list_available_models():
+    """
+    Retorna a lista de modelos de IA aprovados para uso no sistema.
+    Atualmente retorna a lista estática definida em config.py.
+    Futuramente pode ser expandido para validar contra a API da Vertex AI.
+    """
+    return AVAILABLE_MODELS
 
 def get_psi_data(url: str) -> dict:
     """Chama a API do Google PageSpeed Insights e retorna os scores de performance."""

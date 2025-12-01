@@ -10,7 +10,7 @@ import tempfile
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
 
 from src.database import (
-    get_user_role, fetch_personas, fetch_linked_sets_for_persona, 
+    get_user_role, fetch_personas, fetch_linked_sets_for_persona,
     get_user_id, log_chat_interaction, register_feedback
 )
 from src.chat_logic import get_rag_chain, get_web_search_chain, get_hybrid_chain
@@ -66,7 +66,7 @@ with st.sidebar:
     if not personas_db:
         st.warning("Nenhuma persona encontrada. Crie uma no Gerenciador de Personas.")
         st.stop()
-    
+
     persona_selecionada_nome = st.selectbox("Selecione a Persona:", options=list(personas_db.keys()))
     tipo_acesso = personas_db.get(persona_selecionada_nome, {}).get('access_level', 'N/A')
     st.caption(f"Tipo de Acesso: {tipo_acesso.replace('_', ' ').title()}")
@@ -90,7 +90,7 @@ for message_data in st.session_state.chat_history[persona_selecionada_nome]:
     message = message_data["message"]
     with st.chat_message(message.type):
         st.markdown(message.content)
-        
+
         if message.type == "ai":
             with st.expander("Copiar Resposta"):
                 st.code(message.content, language=None)
@@ -111,7 +111,7 @@ for message_data in st.session_state.chat_history[persona_selecionada_nome]:
 
             col1, col2, _ = st.columns([1, 1, 10])
             disable_buttons = st.session_state[feedback_key] is not None
-            
+
             with col1:
                 if st.button("👍", key=f"like_{interaction_id}", disabled=disable_buttons):
                     register_feedback(interaction_id, 1, comment="Feedback positivo.")
@@ -136,143 +136,96 @@ for message_data in st.session_state.chat_history[persona_selecionada_nome]:
 # Campo de input do usuário
 
 arquivo_temporario = st.file_uploader(
-    "Anexar um documento para esta sessão (temporário)", 
-    type=["pdf", "docx", "txt"], 
+    "Anexar um documento para esta sessão (temporário)",
+    type=["pdf", "docx", "txt"],
     help="O documento será usado apenas para a próxima pergunta e não será salvo na base de conhecimento."
 )
 
 if prompt_usuario := st.chat_input("Faça sua pergunta aqui..."):
 
-    
-
     conteudo_arquivo = None
 
     if arquivo_temporario:
-
         with st.spinner("Processando o documento anexado..."):
-
             conteudo_arquivo = processar_arquivo_temporario(arquivo_temporario)
 
-
-
     # Prepara o prompt final, incluindo o conteúdo do arquivo se houver
-
     prompt_final = prompt_usuario
 
     if conteudo_arquivo:
-
         st.info("Analisando com base no documento anexado.")
-
-        prompt_final = f"""Use o seguinte documento como contexto principal para responder à pergunta.
-
-
+        prompt_final = f"""
+Use o seguinte documento como contexto principal para responder à pergunta.
 
 --- CONTEÚDO DO DOCUMENTO ---
 
 {conteudo_arquivo}
 
-
-
 --- PERGUNTA DO USUÁRIO ---
 
 {prompt_usuario}
-
 """
-
-
 
     st.session_state.chat_history[persona_selecionada_nome].append({"message": HumanMessage(content=prompt_usuario)})
 
-    with st.chat_message("human"): 
-
+    with st.chat_message("human"):
         st.markdown(prompt_usuario)
 
-    
-
     with st.chat_message("ai"):
-
         with st.spinner("Pensando..."):
-
             try:
-
                 persona_data = personas_db[persona_selecionada_nome]
-
                 persona_id, persona_prompt_texto, access_level = persona_data['id'], persona_data['prompt'], persona_data['access_level']
+                
+                # ATUALIZADO: Extraindo Google Corpus ID e Model ID
+                google_corpus_id = persona_data.get('google_corpus_id')
+                model_id = persona_data.get('model_id') # Novo campo
 
                 chat_history_for_chain = [d["message"] for d in st.session_state.chat_history[persona_selecionada_nome][:-1]]
-
-                
 
                 chain = None
 
                 if access_level == "RAG_ONLY":
-
                     allowed_set_ids = fetch_linked_sets_for_persona(persona_id)
-
-                    if not allowed_set_ids: st.error(f"Persona '{persona_selecionada_nome}' sem vínculo a Conjuntos de Conhecimento."); st.stop()
-
-                    chain = get_rag_chain(persona_prompt_texto, allowed_set_ids)
+                    # ATUALIZADO: Só erro se não tiver conjuntos E não tiver Google Corpus
+                    if not allowed_set_ids and not google_corpus_id: 
+                        st.error(f"Persona '{persona_selecionada_nome}' sem vínculo a Conjuntos de Conhecimento."); st.stop()
+                    
+                    # ATUALIZADO: Passando o ID e o Model ID
+                    chain = get_rag_chain(persona_prompt_texto, allowed_set_ids, google_corpus_id, model_id)
 
                 elif access_level == "WEB_ONLY":
-
+                    # Web Only geralmente usa o padrão ou podemos passar o model_id se get_web_search_chain suportar (não implementado nesta task, mas idealmente deveria)
                     chain = get_web_search_chain(persona_prompt_texto)
 
                 elif access_level == "HYBRID":
-
                     allowed_set_ids = fetch_linked_sets_for_persona(persona_id)
-
-                    chain = get_hybrid_chain(persona_prompt_texto, allowed_set_ids)
-
-
+                    # ATUALIZADO: Passando o ID e o Model ID
+                    chain = get_hybrid_chain(persona_prompt_texto, allowed_set_ids, google_corpus_id, model_id)
 
                 if chain:
-
                     response = chain.invoke({"input": prompt_final, "chat_history": chat_history_for_chain})
 
-                    
-
                     resposta_completa = response.get("answer", "Não foi possível gerar uma resposta.")
-
                     contexto_usado = response.get("context", [])
-
-                    
 
                     st.markdown(resposta_completa)
 
-
-
                     if resposta_completa:
-
                         interaction_id = log_chat_interaction(
-
                             user_id=user_id, persona_id=persona_id, session_id=st.session_state.session_id,
-
                             question=prompt_usuario, answer=resposta_completa, context=contexto_usado
-
                         )
 
-                        
-
                         st.session_state.chat_history[persona_selecionada_nome].append({
-
                             "message": AIMessage(content=resposta_completa),
-
                             "interaction_id": interaction_id,
-
                             "context": contexto_usado,
-
                             "feedback_value": None
-
                         })
-
                         st.rerun()
-
                 else:
-
                     st.error("Tipo de acesso da persona desconhecido.")
 
-
-
             except Exception as e:
-
                 st.error(f"Ocorreu um erro ao gerar a resposta: {e}")
