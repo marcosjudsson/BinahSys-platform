@@ -14,6 +14,8 @@ from src.database import (
     get_user_id, log_chat_interaction, register_feedback
 )
 from src.chat_logic import get_rag_chain, get_web_search_chain, get_hybrid_chain
+from src.document_factory import generate_word_document
+from src.utils import debug_log
 
 # --- FUNÇÃO AUXILIAR PARA PROCESSAR ARQUIVO ---
 def processar_arquivo_temporario(uploaded_file):
@@ -72,6 +74,10 @@ with st.sidebar:
     st.caption(f"Tipo de Acesso: {tipo_acesso.replace('_', ' ').title()}")
 
     st.divider()
+    
+    st.checkbox("🛠️ Modo Desenvolvedor", key="debug_mode", help="Exibe logs técnicos e detalhes da execução do RAG.")
+
+    st.divider()
 
     if st.button("🗑️ Limpar Histórico da Conversa"):
         if persona_selecionada_nome in st.session_state.chat_history:
@@ -92,15 +98,59 @@ for message_data in st.session_state.chat_history[persona_selecionada_nome]:
         st.markdown(message.content)
 
         if message.type == "ai":
-            with st.expander("Copiar Resposta"):
-                st.code(message.content, language=None)
+            col_copy, col_download = st.columns([1, 1])
+            with col_copy:
+                with st.expander("Copiar Resposta"):
+                    st.code(message.content, language=None)
+            with col_download:
+                # Gera o documento sob demanda para o histórico
+                try:
+                    hist_doc_buffer = generate_word_document(message.content, title=f"Histórico - {persona_selecionada_nome}")
+                    st.download_button(
+                        label="📄 Baixar .docx",
+                        data=hist_doc_buffer,
+                        file_name=f"resposta_{st.session_state.session_id[:8]}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key=f"download_hist_{st.session_state.session_id}_{message_data.get('interaction_id', uuid.uuid4())}"
+                    )
+                except Exception:
+                    pass
 
-        if message.type == "ai" and "context" in message_data and message_data["context"]:
-            with st.expander("Ver fontes utilizadas"):
-                for doc in message_data["context"]:
-                    source_name = os.path.basename(doc.metadata.get('source', 'Fonte desconhecida'))
-                    st.info(f"**Fonte:** {source_name}")
-                    st.code(doc.page_content, language='text')
+        # Exibe as fontes utilizadas (Contexto / Citações)
+        # O 'context' aqui ainda pode ser o formato antigo (lista de Documentos LangChain)
+        # Para Vertex AI, as citações virão em 'source_documents' (novo campo)
+        
+        # Lógica Robustecida: Tenta pegar source_documents. Se for None ou Lista Vazia, tenta pegar context.
+        sources_to_display = message_data.get('source_documents') or message_data.get('context')
+
+        if message.type == "ai" and sources_to_display:
+            with st.expander("📚 Fontes Utilizadas / Referências"):
+                for idx, doc in enumerate(sources_to_display):
+                        st.markdown("---")
+                        
+                        # TIPO 1: Citação do Google Vertex (Dicionário de URI/Título)
+                        if isinstance(doc, dict) and 'uri' in doc:
+                            title = doc.get('title', 'Documento sem título')
+                            uri = doc.get('uri', '#')
+                            
+                            # Tenta criar um link clicável para o console do GCP ou para o bucket
+                            # De: gs://bucket/file.pdf -> https://storage.cloud.google.com/bucket/file.pdf
+                            # Assume que o formato é sempre gs://
+                            http_link = uri.replace("gs://", "https://storage.cloud.google.com/")
+                            
+                            st.markdown(f"**Fonte {idx+1}:** [{title}]({http_link})")
+                            st.caption(f"Caminho original: `{uri}`")
+
+                        # TIPO 2: Documento LangChain/FAISS (Objeto com page_content e metadata)
+                        elif hasattr(doc, 'page_content'):
+                            source_name = doc.metadata.get('source', 'Desconhecido')
+                            content_preview = doc.page_content[:200].replace("\n", " ") # Prévia do conteúdo
+                            st.markdown(f"**Fonte {idx+1} (Local):** {source_name}")
+                            st.text(f"...{content_preview}...")
+                        
+                        # TIPO 3: Fallback (Segurança para outros formatos inesperados)
+                        else:
+                            st.text(f"Fonte {idx+1}: {str(doc)}")
 
         if message.type == "ai" and "interaction_id" in message_data:
             interaction_id = message_data["interaction_id"]
@@ -206,10 +256,26 @@ Use o seguinte documento como contexto principal para responder à pergunta.
                 if chain:
                     response = chain.invoke({"input": prompt_final, "chat_history": chat_history_for_chain})
 
-                    resposta_completa = response.get("answer", "Não foi possível gerar uma resposta.")
+                    # Adaptação para compatibilidade: tenta 'result' (Vertex) ou 'answer' (LangChain Local)
+                    resposta_completa = response.get("result", response.get("answer", "Não foi possível gerar uma resposta."))
                     contexto_usado = response.get("context", [])
+                    # NOVA CAPTURA: Fontes do Vertex AI (Citações)
+                    fontes_usadas = response.get("source_documents", [])
 
                     st.markdown(resposta_completa)
+
+                    # --- BOTÃO DE EXPORTAÇÃO (NOVO) ---
+                    try:
+                        doc_buffer = generate_word_document(resposta_completa, title=f"Resposta - {persona_selecionada_nome}")
+                        st.download_button(
+                            label="📄 Baixar Resposta (.docx)",
+                            data=doc_buffer,
+                            file_name="resposta_ia.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key="download_new_response"
+                        )
+                    except Exception as e:
+                        st.warning(f"Não foi possível gerar o documento: {e}")
 
                     if resposta_completa:
                         interaction_id = log_chat_interaction(
@@ -221,6 +287,7 @@ Use o seguinte documento como contexto principal para responder à pergunta.
                             "message": AIMessage(content=resposta_completa),
                             "interaction_id": interaction_id,
                             "context": contexto_usado,
+                            "source_documents": fontes_usadas,
                             "feedback_value": None
                         })
                         st.rerun()

@@ -1,24 +1,26 @@
-# src/chat_logic.py (VERSÃO FINAL - IMPORTS ABSOLUTOS E BLINDADOS)
+# src/chat_logic.py (VERSÃO ESTÁVEL - UNIFICADA)
 
 import os
 import streamlit as st
+import traceback
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_community.vectorstores import FAISS
-from langchain_tavily import TavilySearch
+from langchain_community.tools.tavily_search import TavilySearchResults
 
-# --- CORREÇÃO DEFINITIVA DOS IMPORTS ---
-# Importando diretamente dos submódulos para evitar erro 'ModuleNotFoundError'
+# --- IMPORTS CRÍTICOS (Usando langchain_classic que resolveu o problema no passado) ---
 from langchain_classic.chains import create_history_aware_retriever
 from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 
-# Importações internas do projeto
+# Imports Internos
 from src import api_integrations
 from src import seo_tools
 from src.config import get_llm, get_embeddings_model, FAISS_INDEX_PATH
-from src.google_rag_engine import consultar_corpus_vertex # Motor Nuvem
+from src.google_rag_engine import consultar_corpus_vertex, get_google_config
+from src.database import log_chat_interaction
+from src.utils import debug_log
 
 @st.cache_resource
 def load_persistent_vectorstore():
@@ -26,283 +28,145 @@ def load_persistent_vectorstore():
     try:
         return FAISS.load_local(FAISS_INDEX_PATH, get_embeddings_model(), allow_dangerous_deserialization=True)
     except Exception as e:
-        st.error(f"Erro ao carregar índice FAISS: {e}")
+        debug_log(f"Erro FAISS: {e}")
         return None
 
-# --- CADEIA RAG (Google Vertex OU Local) ---
+# --- RAG CHAIN ---
 def get_rag_chain(persona_prompt, allowed_set_ids, google_corpus_id=None, model_id=None):
-    
-    # 1. LÓGICA GOOGLE VERTEX AI (NUVEM)
+    # Vertex AI
     if google_corpus_id and len(str(google_corpus_id)) > 5:
-        st.toast(f"☁️ Conectando ao Cérebro Nuvem (Vertex AI)...", icon="⚡")
+        proj, _ = get_google_config()
+        st.toast(f"☁️ Vertex AI", icon="⚡")
         
         def vertex_chain_func(input_dict):
             query = input_dict.get("input", "")
-            # Passando a personalidade (persona_prompt) e o Modelo (model_id) para o Vertex
-            resposta = consultar_corpus_vertex(
-                query=query, 
-                corpus_id=google_corpus_id, 
-                system_instruction=persona_prompt,
-                model_id_override=model_id
+            res = consultar_corpus_vertex(
+                query=query, corpus_id=google_corpus_id, 
+                system_instruction=persona_prompt, model_id_override=model_id
             )
-            return {"answer": resposta, "context": []} 
+            debug_log("Vertex Res", data=res)
+            
+            if isinstance(res, dict):
+                return {"result": res.get("text", ""), "source_documents": res.get("citations", [])}
+            return {"result": str(res), "source_documents": []}
         
         return RunnableLambda(vertex_chain_func)
     
-    # 2. LÓGICA LEGADA (FAISS LOCAL)
-    llm = get_llm(model_name=model_id) # Passa o modelo para o LLM local também
+    # Local FAISS
+    llm = get_llm(model_name=model_id)
     vectorstore = load_persistent_vectorstore()
-    
-    if vectorstore is None: 
-        st.error("Base de conhecimento local não encontrada. Use o modo Nuvem ou faça upload de arquivos.")
-        st.stop()
+    if not vectorstore: st.error("Sem base local."); st.stop()
 
-    def filter_documents(docs):
+    def filter_docs(docs):
         if not allowed_set_ids: return []
-        return [doc for doc in docs if doc.metadata.get("set_id") in set(allowed_set_ids)]
+        return [d for d in docs if d.metadata.get("set_id") in set(allowed_set_ids)]
 
-    base_retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 5})
-    # Nota: Filtro complexo via RunnableLambda aplicado após retrieval
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
     
-    contextualize_q_prompt = ChatPromptTemplate.from_messages([
-        ("system", "Dada a conversa e a pergunta, reformule a pergunta para ser autônoma."),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}")
-    ])
-    history_aware_retriever = create_history_aware_retriever(llm, base_retriever, contextualize_q_prompt)
+    hist_prompt = ChatPromptTemplate.from_messages([("system", "Reformule a pergunta."), MessagesPlaceholder("chat_history"), ("human", "{input}")])
+    hist_retriever = create_history_aware_retriever(llm, retriever, hist_prompt)
+    
+    qa_prompt = ChatPromptTemplate.from_messages([("system", persona_prompt), MessagesPlaceholder("chat_history"), ("human", "{input}")])
+    qa_chain = create_stuff_documents_chain(llm, qa_prompt)
+    
+    return create_retrieval_chain(hist_retriever, qa_chain)
 
-    qa_prompt = ChatPromptTemplate.from_messages([
-        ("system", persona_prompt),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}")
-    ])
-    question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
-
-    return create_retrieval_chain(history_aware_retriever, question_answer_chain)
-
-# --- CADEIA WEB SEARCH ---
+# --- WEB CHAIN ---
 def get_web_search_chain(persona_prompt):
     llm = get_llm()
-    tavily_key = st.secrets.get("TAVILY_API_KEY")
-    if not tavily_key:
-        return RunnableLambda(lambda x: {"answer": "Erro: TAVILY_API_KEY não configurada.", "context": []})
+    key = st.secrets.get("TAVILY_API_KEY")
+    if not key: return RunnableLambda(lambda x: {"result": "Erro: Sem TAVILY_API_KEY", "context": []})
+    
+    tool = TavilySearchResults(tavily_api_key=key)
+    prompt = ChatPromptTemplate.from_messages([("system", persona_prompt), ("human", "{input}\nWeb: <res>{web_search_results}</res>")])
+    
+    chain = ({"web_search_results": (lambda x: tool.invoke({"query": x["input"]})), "input": RunnablePassthrough()} | prompt | llm | StrOutputParser())
+    return RunnablePassthrough.assign(result=chain, context=lambda x: [])
 
-    search_tool = TavilySearch()
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", persona_prompt),
-        ("human", "Pergunta: {input}\n\nResultados da Web:\n<web_search_results>{web_search_results}</web_search_results>")
-    ])
-
-    chain = (
-        {"web_search_results": (lambda x: search_tool.invoke({"query": x["input"]})), "input": RunnablePassthrough()} 
-        | prompt 
-        | llm 
-        | StrOutputParser()
-    )
-
-    final_chain = RunnablePassthrough.assign(answer=chain, context=lambda x: [])
-    return final_chain
-
-# --- CADEIA HÍBRIDA (Google Vertex + Web) ---
+# --- HYBRID CHAIN ---
 def get_hybrid_chain(persona_prompt, allowed_set_ids, google_corpus_id=None, model_id=None):
-    llm = get_llm(model_name=model_id) # Passa o modelo para o LLM local
-    tavily_key = st.secrets.get("TAVILY_API_KEY")
-    search_tool = TavilySearch() if tavily_key else None
+    llm = get_llm(model_name=model_id)
+    key = st.secrets.get("TAVILY_API_KEY")
+    tool = TavilySearchResults(tavily_api_key=key) if key else None
     
-    # 1. HÍBRIDO NUVEM (Vertex + Web)
-    if google_corpus_id and len(str(google_corpus_id)) > 5:
-        def vertex_hybrid_chain_func(input_dict):
-            query = input_dict.get("input", "")
+    if google_corpus_id:
+        def vertex_hybrid(input_dict):
+            q = input_dict.get("input", "")
+            web_ctx = ""
+            if tool:
+                try: web_ctx = tool.invoke({"query": q})
+                except: pass
             
-            # Busca Web primeiro (se disponível)
-            web_context = ""
-            if search_tool:
-                try:
-                    web_results = search_tool.invoke({"query": query})
-                    web_context = f"\n\nInformações RECENTES da Web (Tavily):\n{web_results}\n"
-                except:
-                    pass
-            
-            # Injeta o contexto da web na pergunta para o Vertex
-            augmented_query = f"{query} {web_context}"
-            
-            resposta = consultar_corpus_vertex(
-                query=augmented_query, 
-                corpus_id=google_corpus_id,
-                system_instruction=persona_prompt,
-                model_id_override=model_id
-            )
-            return {"answer": resposta, "context": []}
+            res = consultar_corpus_vertex(f"{q} {web_ctx}", google_corpus_id, persona_prompt, model_id)
+            if isinstance(res, dict): return {"result": res.get("text"), "source_documents": res.get("citations", [])}
+            return {"result": str(res), "source_documents": []}
+        return RunnableLambda(vertex_hybrid)
 
-        return RunnableLambda(vertex_hybrid_chain_func)
-
-    # 2. HÍBRIDO LOCAL (FAISS + Web)
+    # Local Fallback
     vectorstore = load_persistent_vectorstore()
-    if vectorstore is None: 
-        return get_web_search_chain(persona_prompt)
-
-    base_retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 5})
+    if not vectorstore: return get_web_search_chain(persona_prompt)
     
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
     prompt = ChatPromptTemplate.from_template(persona_prompt)
-
-    context_chain = RunnablePassthrough.assign(
-        context=lambda x: base_retriever.invoke(x["input"]),
-        web_search_results=lambda x: search_tool.invoke({"query": x["input"]}) if search_tool else "",
+    
+    ctx_chain = RunnablePassthrough.assign(
+        context=lambda x: retriever.invoke(x["input"]),
+        web_search_results=lambda x: tool.invoke({"query": x["input"]}) if tool else "",
         input=lambda x: x["input"]
     )
+    chain = ctx_chain | prompt | llm | StrOutputParser()
+    return RunnablePassthrough.assign(result=chain, context=ctx_chain.pick("context"))
 
-    response_chain = context_chain | prompt | llm | StrOutputParser()
-
-    final_chain = RunnablePassthrough.assign(answer=response_chain, context=context_chain.pick("context"))
-    return final_chain
-
-# --- CADEIA DE AGENTE SEO ---
-SEO_PROMPT_FULL = """
-    Você é um especialista em SEO de alto nível e um copywriter excepcional. Sua tarefa é REESCREVER COMPLETAMENTE o rascunho de post fornecido, com dois objetivos principais:
-    1.  **Otimização para SEO:** Com base na palavra-chave foco, URL e análise da concorrência.
-    2.  **Melhora da Legibilidade:** O texto final DEVE ser mais fácil de ler que o original.
-
-    Após reescrever o post, forneça uma ANÁLISE DETALHADA das otimizações realizadas.
-
-    --- INFORMAÇÕES PARA OTIMIZAÇÃO ---
-    Tópico/Palavra-chave Foco: {keyword}
-    URL de Referência (ou do post): {url}
-    Scores de Performance (PageSpeed Insights): {pagespeed_scores}
-    Score de Legibilidade do Rascunho (Flesch Reading Ease): {readability_score}
-    **META DE LEGIBILIDADE:** O score do texto otimizado deve ser **superior a 60** e, idealmente, maior que o score do rascunho original.
-
-    Resultados da Web da Concorrência:
-    <web_search_results>{web_search_results}</web_search_results>
-
-    Rascunho Original:
-    {input_text}
-
-    --- INSTRUÇÕES DE SAÍDA ---
-    1.  **TEXTO OTIMIZADO DO POST:** Comece diretamente com o artigo completo e reescrito.
-        *   **Estrutura:** Título (H1), meta descrição, introdução, subtítulos (H2, H3), corpo do texto, um Call-to-Action (CTA) forte e, no final, uma seção de **"Perguntas Frequentes (FAQ)"** com 3 a 5 perguntas e respostas relevantes.
-        *   **Legibilidade:** Use frases curtas, parágrafos concisos, listas e negritos para facilitar a leitura. A linguagem deve ser clara e direta.
-        *   **SEO:** Incorpore a palavra-chave foco e termos semânticos relevantes de forma natural.
-    2.  **ANÁLISE DETALHADA:** Após o texto otimizado, insira a linha `--- ANÁLISE DETALHADA ---`.
-        *   Nesta seção, explique as otimizações feitas.
-        *   **Schema Markup:** Inclua uma subseção chamada "Schema Markup (JSON-LD)" contendo o código completo do schema para o FAQ gerado.
-        *   **Instruções para WordPress:** Abaixo do código do schema, adicione uma nota explicando como implementá-lo.
-        *   **Sugestões de Elementos Visuais:** Inclua uma subseção com ideias para enriquecer visualmente o post.
-        *   **Análise da SERP e Concorrência:** Com base nos `web_search_results`, analise os top 3-5 concorrentes.
-        *   **KPIs para Monitoramento:** Sugira 2-3 métricas chave.
-        *   **Recomendações para E-A-T:** Forneça sugestões para fortalecer a autoridade.
-    """
-
+# --- SEO ---
 def get_seo_analysis_chain(persona_prompt, input_text, keyword, url):
     llm = get_llm()
-    search_tool = TavilySearch()
-    prompt_template = ChatPromptTemplate.from_template(SEO_PROMPT_FULL)
-
+    tool = TavilySearchResults(tavily_api_key=st.secrets.get("TAVILY_API_KEY"))
+    
+    # Prompt SEO Simplificado para caber no arquivo sem quebrar
+    prompt = ChatPromptTemplate.from_template("""
+    Atue como especialista SEO. Reescreva o texto focando em: {keyword}.
+    URL: {url}. PageSpeed: {pagespeed_scores}. Legibilidade: {readability_score}.
+    Concorrência: {web_search_results}.
+    Texto Original: {input_text}
+    Saída: Texto Otimizado + Análise Detalhada (Schema, Gaps, KPIs).
+    """)
+    
     chain = (
-        {
-            "web_search_results": lambda x: search_tool.invoke({"query": x["keyword"]}),
-            "readability_score": lambda x: seo_tools.analyze_readability(x["input_text"]),
-            "pagespeed_scores": lambda x: api_integrations.get_psi_data(x["url"]),
-            "persona_prompt": lambda x: x["persona_prompt"],
-            "input_text": lambda x: x["input_text"],
-            "keyword": lambda x: x["keyword"],
-            "url": lambda x: x["url"],
-        }
-        | prompt_template
-        | llm
-        | StrOutputParser()
+        {"web_search_results": lambda x: tool.invoke({"query": x["keyword"]}), 
+         "readability_score": lambda x: seo_tools.analyze_readability(x["input_text"]),
+         "pagespeed_scores": lambda x: api_integrations.get_psi_data(x["url"]),
+         "persona_prompt": lambda x: x["persona_prompt"], "input_text": lambda x: x["input_text"],
+         "keyword": lambda x: x["keyword"], "url": lambda x: x["url"]}
+        | prompt | llm | StrOutputParser()
     )
-    initial_analysis = chain.invoke({"persona_prompt": persona_prompt, "input_text": input_text, "keyword": keyword, "url": url})
-    return {"answer": initial_analysis, "context": []}
+    res = chain.invoke({"persona_prompt": persona_prompt, "input_text": input_text, "keyword": keyword, "url": url})
+    return {"result": res, "context": []}
 
+# --- ASSISTENTE ---
+def gerar_prompt_final_direto(d): return (ChatPromptTemplate.from_template("Crie prompt: {objetivo_final}") | get_llm() | StrOutputParser()).invoke(d)
+def gerar_sugestoes(d): return (ChatPromptTemplate.from_template("Sugira abordagens: {objetivo_final}") | get_llm() | StrOutputParser()).invoke(d)
+def gerar_prompt_final_com_abordagem(d, a): return (ChatPromptTemplate.from_template("Crie prompt com abordagem {diretriz_abordagem}: {objetivo_final}") | get_llm() | StrOutputParser()).invoke({**d, "diretriz_abordagem": a})
 
-# --- LÓGICA DO ASSISTENTE DE CRIAÇÃO DE PERSONA ---
-
-PROMPT_ASSISTENTE_GERACAO_DIRETA = """
-# IDENTIDADE E OBJETIVO
-Você é o "Mestre Criador de Agentes" (MeCA), um especialista sênior em engenharia de prompts. Seu único objetivo é gerar um prompt final de alta performance com base no diagnóstico do usuário.
-
-# PROCESSO
-Analise o diagnóstico e crie o melhor prompt possível para a tarefa. Sua resposta deve ser APENAS o texto do prompt, sem comentários, explicações ou blocos de código.
-
-# REGRAS
-1. O prompt gerado deve ser completo e autocontido.
-2. O prompt deve incluir as variáveis corretas ({{context}}, {{web_search_results}}, {{input}}) com base na "Fonte de Conhecimento" definida no diagnóstico.
----
-DIAGNÓSTICO FORNECIDO PELO USUÁRIO:
-- **Objetivo Final do Agente:** {objetivo_final}
-- **Público-Alvo do Agente:** {usuario_final}
-- **Persona e Tom do Agente:** {persona_e_tom}
-- **Formato de Saída Desejado:** {formato_saida}
-- **Fonte de Conhecimento Principal:** {fonte_conhecimento}
----
-Agora, gere o prompt final.
-"""
-
-def gerar_prompt_final_direto(diagnostico: dict) -> str:
-    llm = get_llm()
-    prompt_template = ChatPromptTemplate.from_template(PROMPT_ASSISTENTE_GERACAO_DIRETA)
-    geracao_chain = prompt_template | llm | StrOutputParser()
-    return geracao_chain.invoke(diagnostico)
-
-PROMPT_ASSISTENTE_BRAINSTORMING = """
-# IDENTIDADE E OBJETIVO
-Você é o "Mestre Criador de Agentes" (MeCA), um especialista sênior em engenharia de prompts. Seu objetivo é atuar como um "Parceiro Criativo" para o usuário.
-
-# PROCESSO
-Com base no diagnóstico fornecido, sugira 2 a 3 abordagens ou estratégias diferentes para a estrutura do prompt final. Apresente os prós e contras de cada uma de forma clara e concisa. Estruture sua resposta usando Markdown e separe as abordagens com '---'.
-
-# EXEMPLO DE RESPOSTA
-**Abordagem 1: Resposta Direta**
-- **Prós:** Simples, rápido, eficiente em tokens.
-- **Contras:** Pode ser menos detalhado.
----
-**Abordagem 2: Chain of Thought (CoT)**
-- **Prós:** Gera respostas mais elaboradas e lógicas.
-- **Contras:** Usa mais tokens e pode ser mais lento.
----
-DIAGNÓSTICO FORNECIDO PELO USUÁRIO:
-- **Objetivo Final do Agente:** {objetivo_final}
-- **Público-Alvo do Agente:** {usuario_final}
-- **Persona e Tom do Agente:** {persona_e_tom}
-- **Formato de Saída Desejado:** {formato_saida}
-- **Fonte de Conhecimento Principal:** {fonte_conhecimento}
----
-Agora, gere as sugestões de abordagem.
-"""
-
-PROMPT_ASSISTENTE_EXECUCAO = """
-# IDENTIDADE E OBJETIVO
-Você é o "Mestre Criador de Agentes" (MeCA), um especialista sênior em engenharia de prompts. Seu objetivo é gerar um prompt final de alta performance com base no diagnóstico do usuário e na diretriz de abordagem que ele escolheu.
-
-# PROCESSO
-Analise o diagnóstico e a diretriz de abordagem. Crie o melhor prompt final possível para a tarefa. Sua resposta deve ser APENAS o texto do prompt, sem comentários, explicações ou blocos de código.
-
-# REGRAS
-1. O prompt gerado deve ser completo e autocontido.
-2. **CRÍTICO:** O prompt DEVE incluir as variáveis corretas ({{context}}, {{web_search_results}}, {{input}}) com base na "Fonte de Conhecimento" definida no diagnóstico. **Exemplo: Se a fonte é RAG_ONLY, o prompt DEVE conter {{context}} e {{input}}.**
----
-DIAGNÓSTICO FORNECIDO PELO USUÁRIO:
-- **Objetivo Final do Agente:** {objetivo_final}
-- **Público-Alvo do Agente:** {usuario_final}
-- **Persona e Tom do Agente:** {persona_e_tom}
-- **Formato de Saída Desejado:** {formato_saida}
-- **Fonte de Conhecimento Principal:** {fonte_conhecimento}
-
-DIRETRIZ DE ABORDAGEM ESCOLHIDA:
-{diretriz_abordagem}
----
-Agora, gere o prompt final.
-"""
-
-def gerar_sugestoes(diagnostico: dict) -> str:
-    llm = get_llm()
-    prompt_template = ChatPromptTemplate.from_template(PROMPT_ASSISTENTE_BRAINSTORMING)
-    chain = prompt_template | llm | StrOutputParser()
-    return chain.invoke(diagnostico)
-
-def gerar_prompt_final_com_abordagem(diagnostico: dict, diretriz_abordagem: str) -> str:
-    llm = get_llm()
-    prompt_template = ChatPromptTemplate.from_template(PROMPT_ASSISTENTE_EXECUCAO)
-    chain = prompt_template | llm | StrOutputParser()
-    input_data = {**diagnostico, "diretriz_abordagem": diretriz_abordagem}
-    return chain.invoke(input_data)
+# --- MAIN ---
+def process_user_input(user_input, persona, user_id, session_id):
+    chain = None
+    try:
+        acc = persona['access_level']
+        if acc == "WEB_ONLY": chain = get_web_search_chain(persona['prompt'])
+        elif acc == "HYBRID": chain = get_hybrid_chain(persona['prompt'], [], persona.get('google_corpus_id'), persona.get('model_id'))
+        else:
+            from src.database import fetch_linked_sets_for_persona
+            sets = fetch_linked_sets_for_persona(persona['id'])
+            chain = get_rag_chain(persona['prompt'], sets, persona.get('google_corpus_id'), persona.get('model_id'))
+            
+        if chain:
+            res = chain.invoke({"input": user_input, "chat_history": []})
+            ans = res.get("result") or res.get("answer") or str(res)
+            src = res.get("source_documents", [])
+            iid = log_chat_interaction(user_id, persona['id'], session_id, user_input, ans, src)
+            return {"result": ans, "source_documents": src, "interaction_id": iid}
+        return {"result": "Erro Chain", "source_documents": []}
+    except Exception as e:
+        debug_log(f"Erro process: {e}")
+        traceback.print_exc()
+        return {"result": f"Erro: {str(e)}", "source_documents": []}

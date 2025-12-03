@@ -1,4 +1,4 @@
-# src/google_rag_engine.py (VERSÃO FINAL: ARQUITETURA CROSS-REGION)
+# src/google_rag_engine.py (VERSÃO COM LOGS ESTRUTURADOS)
 
 import os
 import json
@@ -9,87 +9,42 @@ from google.genai import types
 from dotenv import load_dotenv
 import traceback
 from src.config import AVAILABLE_MODELS
+from src.utils import debug_log # NOVO
 
-# Carrega variáveis de ambiente
 load_dotenv()
 
 def setup_google_credentials():
-    """
-    Configura as credenciais do Google Cloud a partir do st.secrets (para Streamlit Cloud).
-    Cria um arquivo JSON temporário se as credenciais existirem nos secrets.
-    """
-    # Se já tiver a variável de ambiente definida (Local), não faz nada
-    if os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-        return
-
-    # Verifica se temos as credenciais no st.secrets
+    if os.getenv("GOOGLE_APPLICATION_CREDENTIALS"): return
     if "GOOGLE_CREDENTIALS" in st.secrets:
         try:
-            # Cria um arquivo temporário para armazenar o JSON da chave
-            # O delete=False é necessário para que o arquivo persista e possa ser lido pela lib do Google
             with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp_key:
-                # Converte a seção TOML do secrets de volta para JSON
                 json.dump(dict(st.secrets["GOOGLE_CREDENTIALS"]), tmp_key)
-                tmp_key_path = tmp_key.name
-            
-            # Define a variável de ambiente para apontar para esse arquivo
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp_key_path
-            print(f"🔑 Credenciais do Google configuradas via st.secrets em: {tmp_key_path}")
+                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp_key.name
         except Exception as e:
-            print(f"⚠️ Erro ao configurar credenciais via secrets: {e}")
+            debug_log("Erro ao configurar credenciais via secrets", error=e)
 
 def get_google_config():
-    """
-    Recupera configurações e garante autenticação.
-    Retorna (Project ID, Região dos DADOS).
-    """
-    # Tenta configurar credenciais antes de ler configs
     setup_google_credentials()
-
     try:
-        project_id = os.getenv("GOOGLE_PROJECT_ID") or st.secrets.get("GOOGLE_PROJECT_ID")
-        # Esta location é onde estão os DADOS (RAG Corpus), ex: europe-west4
-        rag_location = os.getenv("GOOGLE_LOCATION") or st.secrets.get("GOOGLE_LOCATION", "europe-west4")
-        return project_id, rag_location
-    except Exception:
-        return None, None
+        pid = os.getenv("GOOGLE_PROJECT_ID") or st.secrets.get("GOOGLE_PROJECT_ID")
+        loc = os.getenv("GOOGLE_LOCATION") or st.secrets.get("GOOGLE_LOCATION", "europe-west4")
+        return pid, loc
+    except: return None, None
 
 def consultar_corpus_vertex(query, corpus_id, system_instruction=None, model_id_override=None):
-    """
-    Consulta o Vertex AI RAG usando arquitetura Cross-Region.
-    Dados na Europa -> Processamento nos EUA.
-    """
-    # 1. Configuração
     env_project, env_rag_location = get_google_config()
+    model_location = "us-central1" # Split-Brain Architecture
     
-    # --- A SOLUÇÃO DEFINITIVA: FORÇAR CÉREBRO NOS EUA ---
-    # A região us-central1 sempre tem os modelos mais recentes e estáveis.
-    # Isso não move seus dados, apenas envia a pergunta para ser processada lá.
-    model_location = "us-central1"
-
-    print(f"\n--- 🧠 GOOGLE RAG ENGINE (CROSS-REGION) ---")
-    print(f"1. Projeto: {env_project}")
-    print(f"2. Dados (RAG): {env_rag_location}")
-    print(f"3. Cérebro (LLM): {model_location}")
-    
-    if not env_project:
-        return "Erro Crítico: Project ID do Google Cloud não configurado."
+    if not env_project: return {"text": "Erro: Project ID ausente.", "citations": []}
 
     try:
-        # 2. Inicializa o Cliente na região do CÉREBRO (EUA)
-        # Isso evita o erro 404 de "Model Not Found" na Europa.
         client = genai.Client(vertexai=True, project=env_project, location=model_location)
 
-        # 3. Montagem do Nome do Recurso RAG (Apontando para a EUROPA)
-        # O cliente dos EUA consegue ler dados da Europa se passarmos o caminho completo.
         if "projects/" not in corpus_id:
             rag_resource_name = f"projects/{env_project}/locations/{env_rag_location}/ragCorpora/{corpus_id}"
         else:
             rag_resource_name = corpus_id
         
-        print(f"4. Alvo RAG: {rag_resource_name}")
-
-        # 4. Configuração da Ferramenta RAG
         rag_tool = types.Tool(
             retrieval=types.Retrieval(
                 vertex_rag_store=types.VertexRagStore(
@@ -100,40 +55,75 @@ def consultar_corpus_vertex(query, corpus_id, system_instruction=None, model_id_
             )
         )
 
-        # 5. Definição do Modelo (Dinâmico)
-        # Prioridade: Override (Persona) > Padrão do Config > Hardcoded Fallback
-        if model_id_override:
-            model_id = model_id_override
-        elif AVAILABLE_MODELS:
-            model_id = AVAILABLE_MODELS[0]
-        else:
-            model_id = "gemini-2.0-flash-001"
+        if model_id_override: model_id = model_id_override
+        elif isinstance(AVAILABLE_MODELS, list): model_id = AVAILABLE_MODELS[0]
+        elif isinstance(AVAILABLE_MODELS, dict): model_id = list(AVAILABLE_MODELS.keys())[0]
+        else: model_id = "gemini-2.0-flash-001"
 
-        print(f"5. Modelo Selecionado: {model_id}")
+        debug_log("Iniciando Request Vertex AI", data={"model": model_id, "rag_source": rag_resource_name})
 
-        # 6. Configuração da Geração (Persona + RAG)
-        generate_config = types.GenerateContentConfig(
-            tools=[rag_tool],
-            temperature=0.1, 
-            system_instruction=system_instruction
-        )
-
-        # 7. Execução
         response = client.models.generate_content(
             model=model_id,
             contents=query, 
-            config=generate_config
+            config=types.GenerateContentConfig(
+                tools=[rag_tool],
+                temperature=0.1, 
+                system_instruction=system_instruction
+            )
         )
 
-        print("6. Resposta recebida com sucesso.")
-        
-        if response.text:
-            return response.text
-        else:
-            return "O modelo processou a consulta mas retornou vazio (Verifique filtros de segurança)."
+        # --- EXTRAÇÃO DE CITAÇÕES ---
+        citations = []
+        try:
+            if response.candidates:
+                candidate = response.candidates[0]
+                cand_dict = candidate.to_json_dict() if hasattr(candidate, 'to_json_dict') else {}
+                
+                grounding_meta = cand_dict.get('grounding_metadata') or cand_dict.get('groundingMetadata')
+                
+                if grounding_meta:
+                    chunks = grounding_meta.get('grounding_chunks') or grounding_meta.get('groundingChunks') or []
+                    debug_log(f"Grounding Chunks encontrados: {len(chunks)}")
+                    
+                    for chunk in chunks:
+                        uri = None
+                        title = None
+                        
+                        # 1. Tenta direto do retrieved_context (Padrão Gemini 2.0)
+                        rc = chunk.get('retrieved_context') or chunk.get('retrievedContext')
+                        if rc:
+                            uri = rc.get('uri')
+                            title = rc.get('title')
+                            
+                            # Fallback para rag_chunk
+                            if not uri:
+                                rag_c = rc.get('rag_chunk') or rc.get('ragChunk')
+                                if rag_c:
+                                    uri = rag_c.get('uri')
+                                    title = title or rag_c.get('title')
+
+                        # 2. Web Fallback
+                        if not uri:
+                            web = chunk.get('web')
+                            if web:
+                                uri = web.get('uri') or web.get('url')
+                                title = web.get('title')
+
+                        if uri:
+                            clean_title = title or uri.split('/')[-1]
+                            if not any(c['uri'] == uri for c in citations):
+                                citations.append({"uri": uri, "title": clean_title})
+
+        except Exception as e:
+            debug_log("Aviso: Falha na extração de citações", error=e)
+
+        debug_log("Citações Finais Extraídas", data=citations)
+
+        return {
+            "text": response.text if response.text else "Sem resposta.",
+            "citations": citations
+        }
 
     except Exception as e:
-        print(f"\n❌ ERRO FATAL NO ENGINE:")
-        traceback.print_exc()
-        # Retorna mensagem amigável mas técnica para debug na tela
-        return f"ERRO TÉCNICO (Vertex AI): {str(e)}"
+        debug_log("Erro Crítico Vertex AI", error=e)
+        return {"text": f"ERRO TÉCNICO: {str(e)}", "citations": []}
