@@ -1,78 +1,65 @@
-# BinahSys - Plataforma de IA Conversacional
+# Apresentação do Projeto: Plataforma BinahSys
 
-## Visão Geral
-
-O BinahSys é uma plataforma inteligente que integra modelos de linguagem de larga escala (LLMs) com bases de conhecimento para fornecer respostas precisas e contextualizadas. Ele suporta tanto bases de conhecimento locais (FAISS) quanto integração com serviços de RAG na nuvem (Google Vertex AI).
+## Transformando Conhecimento em Resultados com Inteligência e Entendimento
 
 ---
 
-## 🚀 Como Executar Localmente
+### 1. Sumário Executivo
 
-1.  **Clone o repositório:**
-    `git clone <URL_DO_REPOSITORIO>`
-    `cd BinahSys`
-
-2.  **Crie e ative o ambiente virtual:**
-    `python -m venv venv`
-    `.\venv\Scripts\activate` (Windows PowerShell)
-    `source venv/bin/activate` (Linux/macOS)
-
-3.  **Instale as dependências:**
-    `pip install -r requirements.txt`
-
-4.  **Configure as variáveis de ambiente:**
-    Crie um arquivo `.env` na raiz do projeto ou configure as variáveis diretamente no `st.secrets`.
-
-5.  **Execute o Streamlit:**
-    `streamlit run app.py`
+A Plataforma BinahSys é uma iniciativa estratégica para transformar a forma como gerenciamos e disseminamos o conhecimento na empresa. Através de um sistema de entendimento que utiliza Inteligência Artificial, combatemos a ineficiência e criamos uma base de conhecimento viva que serve como pilar para **capacitação e suporte on-demand**. Nossos "Agentes de IA Especialistas" automatizam processos, centralizam o conhecimento de projetos e atuam como tutores virtuais, fornecendo respostas instantâneas e precisas para colaboradores, clientes e consultores.
 
 ---
 
-## ⚙️ Variáveis de Ambiente Críticas
+### 2. O Cenário Atual: Nossas Dores e Desafios
 
-Estas variáveis devem ser configuradas no arquivo `.env` (para execução local) ou na seção `Secrets` do Streamlit Cloud (para deploy):
+Em nosso dia a dia, enfrentamos desafios recorrentes que consomem tempo, geram retrabalho e dificultam o acesso ao conhecimento estratégico.
 
-*   **`DATABASE_URL`**: URL de conexão com o banco de dados PostgreSQL.
-    *   Ex: `postgresql://user:password@host:port/database`
-*   **`GOOGLE_PROJECT_ID`**: ID do seu projeto no Google Cloud Platform.
-*   **`GOOGLE_LOCATION`**: Região onde seu Vertex AI RAG Corpus está hospedado (ex: `europe-west4`).
-*   **`TAVILY_API_KEY`**: Chave da API Tavily Search para buscas na web.
-*   **`PAGESPEED_API_KEY`**: Chave da API Google PageSpeed Insights.
-*   **`GOOGLE_CREDENTIALS`**: **APENAS para Streamlit Cloud.** Chave JSON da sua Service Account do GCP, formatada como TOML no `st.secrets`.
-    *   *Exemplo no `st.secrets`:*
-        ```toml
-        [GOOGLE_CREDENTIALS]
-        type = "service_account"
-        project_id = "seu-projeto-id"
-        private_key_id = "..."
-        private_key = "-----BEGIN PRIVATE KEY-----\n..."
-        client_email = "..."
-        client_id = "..."
-        auth_uri = "https://accounts.google.com/o/oauth2/auth"
-        token_uri = "https://oauth2.googleapis.com/token"
-        auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
-        client_x509_cert_url = "..."
-        universe_domain = "googleapis.com"
-        ```
+*   **Criação de Documentos Lenta e Inconsistente:** Quanto tempo levamos para criar um BBP, um Termo de Abertura ou um documento de Handover? Cada gerente de projeto usa um modelo diferente, e informações valiosas se perdem entre as versões.
+*   **Conhecimento Descentralizado:** Onde está a documentação do Projeto X? E as atas da reunião Y? Nosso conhecimento vital está espalhado em e-mails, pastas de rede, e na cabeça de poucas pessoas. Quando alguém sai da empresa, parte desse conhecimento vai junto.
+*   **Onboarding Lento e Custoso:** Treinar um novo colaborador nos nossos processos e projetos é um processo longo e que demanda muito tempo de outros membros da equipe.
+*   **Respostas Lentas para Perguntas Simples:** Perguntas sobre especificações de um projeto ou decisões passadas muitas vezes dependem da disponibilidade de uma pessoa específica, criando gargalos.
+*   **Capacitação Lenta e Dependente de Especialistas:** Treinar novos clientes, consultores e colaboradores sobre nossos sistemas e processos consome um tempo valioso dos nossos especialistas, que poderiam estar focados em outras atividades.
 
 ---
 
-## 🛠️ Dependências Críticas
+### 3. A Solução: Plataforma BinahSys - Um Sistema de Entendimento
 
-*   **`langchain` / `langchain-classic`**: Frameworks para construção de aplicações com LLMs.
-*   **`google-genai`**: SDK oficial para integração com modelos Gemini da Google.
-*   **`python-docx`**: Para geração de documentos `.docx`.
-*   **`psycopg2-binary`**: Driver PostgreSQL para conexão com o banco de dados.
-*   **`streamlit`**: Framework para construção da interface de usuário.
+A BinahSys ataca esses problemas de frente, não como um simples repositório, mas como um **sistema que facilita o entendimento**.
 
----
-
-## 🧩 Arquitetura
-
-Consulte `3. Recursos/DiamondOne/ARCHITECTURE.md` para uma visão detalhada da arquitetura do sistema, incluindo a estratégia de RAG Híbrida e a Arquitetura Cross-Region.
+*   **De Dados a Entendimento:** Em vez de apenas armazenar arquivos, a plataforma os processa, conecta e os transforma em uma base de conhecimento viva, permitindo que a IA gere insights e não apenas dados brutos.
+*   **Consistência e Padronização:** As Personas garantem que todos os documentos e respostas sigam o mesmo padrão de qualidade e formato, aumentando nossa profissionalismo.
+*   **Agilidade e Autonomia:** A equipe ganha autonomia para encontrar respostas e executar tarefas, liberando os especialistas para se concentrarem em atividades de maior valor estratégico.
+*   **Capacitação Escalável e On-Demand:** A plataforma pode ser usada para criar "Tutores Virtuais" especialistas em nossos produtos e processos, oferecendo treinamento e suporte 24/7 para clientes, consultores e novos funcionários, de forma padronizada e em larga escala.
 
 ---
 
-## ⚠️ Solução de Problemas
+### 4. Por que "BinahSys"? A Estratégia por Trás do Nome
 
-Consulte `3. Recursos/DiamondOne/TROUBLESHOOTING.md` para problemas comuns e suas soluções.
+A escolha do nome **BinahSys** representa a evolução da nossa visão para este projeto.
+
+*   **Binah (בִּינָה):** É uma palavra hebraica que significa mais do que apenas "conhecimento". Ela representa **"entendimento", "discernimento" e a capacidade de conectar ideias**. Nossa plataforma não é um simples repositório de dados, mas um motor de entendimento que ajuda a interpretar e a dar sentido ao nosso conhecimento.
+*   **Sys (Sistema):** O sufixo "Sys" reforça que não estamos construindo apenas uma ferramenta de IA, mas um **sistema robusto e escalável** para gerenciar e orquestrar múltiplas inteligências, processos e fontes de dados.
+
+Além disso, a marca "BinahSys" funcionará como a "plataforma-mãe". Os agentes especialistas que criarmos nela poderão seguir a nomenclatura já conhecida na empresa (ex: `FinancialOne, powered by BinahSys`), mantendo a consistência e fortalecendo a identidade da nossa tecnologia de IA.
+
+---
+
+### 5. Funcionalidades Chave na Prática
+
+*   **Chat com Especialista:** A interface principal para interagir com as Personas de IA.
+*   **Gerenciador de Personas:** Onde criamos e treinamos nossos especialistas de IA, definindo suas habilidades e fontes de conhecimento (documentos internos, web, ou ambos).
+*   **Gerenciador de Conhecimento:** O cérebro da plataforma. Onde fazemos o upload de documentos para ensinar nossas Personas.
+*   **Dashboard de Análise:** Para medirmos o uso da plataforma, entendermos as principais dúvidas dos usuários e melhorarmos continuamente a inteligência do sistema.
+*   **SEO:** Agente de otimização para postagens no nosso blog.
+
+---
+
+### 6. Visão de Futuro: Onde Queremos Chegar
+
+O que temos hoje é apenas o começo. Nosso **roadmap ([[ROADMAP]])** prevê uma evolução contínua, incluindo:
+
+*   **Páginas de Chat Simplificadas:** Links diretos para Personas específicas, facilitando o uso pela equipe de um projeto.
+*   **Sincronização com Google Drive:** Manter a base de conhecimento sempre atualizada, de forma automática.
+*   **Memória de Longo Prazo:** Fazer com que o agente aprenda com cada conversa, tornando-se mais inteligente e contextualizado com o tempo.
+*   **Workflows de Agentes:** Automatizar processos complexos de ponta a ponta, onde múltiplas Personas colaboram para executar uma tarefa.
+*   **Integração com Arquitetura de dados:** Possibilitar que o agente acesso nosso rag na nuvem atraves do Vertex Ai, analisando documentos de pdf, docx e etc criando relatorios e documentos padronizados.

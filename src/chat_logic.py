@@ -9,7 +9,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_community.vectorstores import FAISS
 from langchain_community.tools.tavily_search import TavilySearchResults
 
-# --- IMPORTS CRÍTICOS (Usando langchain_classic que resolveu o problema no passado) ---
+# --- IMPORTS CRÍTICOS (Usando langchain_classic que está instalado) ---
 from langchain_classic.chains import create_history_aware_retriever
 from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain

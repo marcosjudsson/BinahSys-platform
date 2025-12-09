@@ -103,19 +103,9 @@ for message_data in st.session_state.chat_history[persona_selecionada_nome]:
                 with st.expander("Copiar Resposta"):
                     st.code(message.content, language=None)
             with col_download:
-                # Gera o documento (Streamlit exige que seja antes do download_button)
+                # Gera o documento sob demanda para o histórico
                 try:
-                    citations_for_doc = message_data.get('source_documents') or message_data.get('context')
-                    
-                    # DEBUG: Mostra o que está sendo passado
-                    if st.session_state.get("debug_mode"):
-                        st.caption(f"Citações para histórico: {len(citations_for_doc) if citations_for_doc else 0}")
-                    
-                    hist_doc_buffer = generate_word_document(
-                        message.content, 
-                        title=f"Histórico - {persona_selecionada_nome}",
-                        citations=citations_for_doc
-                    )
+                    hist_doc_buffer = generate_word_document(message.content, title=f"Histórico - {persona_selecionada_nome}")
                     st.download_button(
                         label="📄 Baixar .docx",
                         data=hist_doc_buffer,
@@ -123,8 +113,8 @@ for message_data in st.session_state.chat_history[persona_selecionada_nome]:
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         key=f"download_hist_{st.session_state.session_id}_{message_data.get('interaction_id', uuid.uuid4())}"
                     )
-                except Exception as e:
-                    st.error(f"Erro: {e}")
+                except Exception:
+                    pass
 
         # Exibe as fontes utilizadas (Contexto / Citações)
         # O 'context' aqui ainda pode ser o formato antigo (lista de Documentos LangChain)
@@ -271,21 +261,12 @@ Use o seguinte documento como contexto principal para responder à pergunta.
                     contexto_usado = response.get("context", [])
                     # NOVA CAPTURA: Fontes do Vertex AI (Citações)
                     fontes_usadas = response.get("source_documents", [])
-                    
-                    # DEBUG: Mostra o que chegou se estiver em modo dev
-                    if st.session_state.get("debug_mode"):
-                        st.write("DEBUG: Fontes para DOCX:", fontes_usadas)
 
                     st.markdown(resposta_completa)
 
                     # --- BOTÃO DE EXPORTAÇÃO (NOVO) ---
                     try:
-                        # ATUALIZADO: Passando citações para snapshots visuais
-                        doc_buffer = generate_word_document(
-                            resposta_completa, 
-                            title=f"Resposta - {persona_selecionada_nome}",
-                            citations=fontes_usadas
-                        )
+                        doc_buffer = generate_word_document(resposta_completa, title=f"Resposta - {persona_selecionada_nome}")
                         st.download_button(
                             label="📄 Baixar Resposta (.docx)",
                             data=doc_buffer,
