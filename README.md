@@ -4,7 +4,7 @@
 
 BinahSys is an open-source platform that transforms static corporate documents into a **living, conversational knowledge base**. Through configurable AI Expert Agents (Personas), it enables on-demand training, support, and knowledge retrieval — at scale, 24/7.
 
-🔗 **[Live Demo](https://diamondone-v4-app-khq5xkcgkambe4hzm3efq9.streamlit.app/)**
+🔗 **[Live Demo](https://binahsys.streamlit.app/)**
 
 ---
 
